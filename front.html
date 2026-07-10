@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Attendance Register</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#0A0A0A; --panel:#1A1A1A; --cream:#F5F5F5; --accent:#FFFFFF;
+    --green:#B8FFCB; --red:#FF6B6B; --borderRed:#B33A3A; --amber:#FFD166;
+    --blue:#A0C4FF; --muted:rgba(241,245,241,.5);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--cream); font-family:system-ui,-apple-system,sans-serif;}
+  .wrap{max-width:460px; margin:0 auto; padding:24px 16px 48px;}
+  h1{font-family:Georgia,'Times New Roman',serif; text-transform:uppercase; letter-spacing:.08em; text-align:center; font-size:24px; margin:0;}
+  .rule{border-top:2px dashed rgba(241,245,241,.35); margin:14px 0 22px;}
+  section{background:var(--panel); border:1px solid rgba(255,255,255,.2); border-radius:10px; padding:16px; margin-bottom:18px;}
+  h2{display:flex; align-items:center; gap:8px; font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--accent); margin:0 0 8px;}
+  p.hint{font-size:11px; color:var(--muted); margin:6px 0 0;}
+  select, input{width:100%; background:var(--bg); border:1px solid rgba(255,255,255,.4); border-radius:6px; padding:9px; color:var(--cream); font-size:14px; margin-top:6px;}
+  button.action{width:100%; margin-top:12px; padding:12px; border:none; border-radius:6px; text-transform:uppercase; letter-spacing:.05em; font-size:14px; cursor:pointer; transition:opacity .2s;}
+  button.action:disabled{opacity:.4; cursor:not-allowed;}
+  button.gold{background:var(--accent); color:#1A1A1A; font-weight:700;}
+  button.outline{background:transparent; border:1px solid var(--accent); color:var(--accent);}
+  button.danger{background:var(--borderRed); color:var(--cream);}
+  button.amber{background:var(--amber); color:#1A1A1A; font-weight:700;}
+  button.blue{background:var(--blue); color:#1A1A1A; font-weight:700;}
+  .row{display:flex; gap:8px; margin-top:8px;}
+  .row input{margin-top:0;}
+  .roster-item{display:flex; justify-content:space-between; align-items:center; font-size:14px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,.1);}
+  .roster-item button{background:none; border:none; color:var(--red); font-size:12px; cursor:pointer;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .stamp{border:4px solid; border-radius:10px; padding:16px; text-align:center; font-weight:700; text-transform:uppercase; letter-spacing:.1em; margin-top:14px;}
+  .stamp.ok{border-color:#3F8F63; color:var(--green);}
+  .stamp.err{border-color:var(--borderRed); color:var(--red); text-transform:none; letter-spacing:normal; font-weight:400; font-size:14px;}
+  .summary-line{display:flex; justify-content:space-between; font-size:14px; padding:4px 0;}
+  .low{color:var(--red); font-weight:600;}
+  .ok-pct{color:var(--green);}
+  .maxlist{max-height:180px; overflow-y:auto;}
+  .note{font-size:11px; color:var(--muted); text-align:center; margin-top:6px;}
+  .loading{display:flex; align-items:center; justify-content:center; height:60vh; font-size:14px;}
+  .data-mgmt-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;}
+  .data-mgmt-grid button{font-size:11px; padding:8px;}
+  .section-title{font-size:11px; text-transform:uppercase; color:rgba(245,245,245,.6); margin:10px 0 4px;}
+  .cr-pin-box{background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.1); border-radius:6px; padding:10px; margin-top:8px; font-size:12px; color:var(--muted);}
+  .chk-row{display:flex; align-items:center; gap:8px; margin-top:10px;}
+  .chk-row input[type="checkbox"]{width:auto; margin:0; accent-color:var(--red);}
+  .chk-row label{font-size:11px; color:var(--red); text-transform:uppercase; letter-spacing:.03em; cursor:pointer;}
+  .undo-box{background:rgba(160,196,255,.08); border:1px solid rgba(160,196,255,.2); border-radius:6px; padding:10px; margin-top:10px;}
+  .session-select-row{display:flex; gap:8px; margin-top:8px; align-items:flex-end;}
+  .session-select-row select{flex:1; margin-top:0;}
+  .session-select-row button{flex:0 0 auto; width:auto; padding:9px 14px; margin-top:0; font-size:12px;}
+</style>
+<base target="_blank">
+</head>
+<body>
+
+<div class="wrap" id="app"><div class="loading">Connecting...</div></div>
+
+<script>
+/* ============ SETUP: paste your Apps Script Web App URL here ============ */
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzGGFdhRresZ8UtHnAqDL1MImOFaX7FAjQrfUs-t5djQYVbbzYCE08-ds3Ya4qRUytw/exec";
+/* ========================================================================= */
+
+function defaultState() {
+  return {
+    classroomLocation: null,
+    roster: [],
+    sessionConfig: { active: false, startTime: null, durationMin: 5, radiusM: 50, dateKey: null, subject: null, sessionId: null },
+    sessionHistory: [],
+    attendanceLog: {},
+    subjects: [],
+    crPin: false,
+    canUndo: false
+  };
+}
+
+let state = defaultState();
+let loaded = false;
+let role = "student";
+let studentId = "";
+let subjectInput = "";
+let durationInput = 5;
+let radiusInput = 50;
+let durationCustom = false;
+let radiusCustom = false;
+let summarySubject = "";
+let busy = false;
+let stamp = null;
+let newRoll = "";
+let newName = "";
+let crPinValue = "";
+let deleteSheets = false;
+let selectedSessionId = "";
+
+/* ─────────── Device ID: One Device = One Attendance ─────────── */
+
+function getDeviceId() {
+  let id = localStorage.getItem("attendance_device_id");
+  if (!id) {
+    const raw = navigator.userAgent + screen.width + screen.height + screen.colorDepth +
+                navigator.language + new Date().getTime() + Math.random().toString(36).slice(2);
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const chr = raw.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    id = Math.abs(hash).toString(16) + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem("attendance_device_id", id);
+  }
+  return id;
+}
+
+function isTypingNow() {
+  const a = document.activeElement;
+  return a && a.tagName === "INPUT";
+}
+
+async function apiGet() {
+  const res = await fetch(APPS_SCRIPT_URL, { method: "GET" });
+  return res.json();
+}
+async function apiPost(action, data) {
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ action, data })
+  });
+  return res.json();
+}
+
+async function initialLoad() {
+  try { state = await apiGet(); } catch (e) { state = defaultState(); }
+  loaded = true;
+  render();
+}
+
+async function backgroundRefresh() {
+  if (isTypingNow()) return;
+  try { const fresh = await apiGet(); state = fresh; render(); } catch (e) {}
+}
+
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Geolocation is not supported on this device. Please use a smartphone with GPS enabled."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve(pos.coords),
+      err => {
+        let msg = "Could not get your location. ";
+        switch (err.code) {
+          case 1: msg += "Permission denied. Please allow location access in your browser settings."; break;
+          case 2: msg += "Position unavailable. Make sure GPS is turned on."; break;
+          case 3: msg += "Location request timed out. Try again."; break;
+          default: msg += err.message || "Unknown error.";
+        }
+        reject(new Error(msg));
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
+function fmtTime(ms) {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+function fmtDateTime(ts) {
+  const d = new Date(ts);
+  return d.toISOString().slice(0, 10) + " " + d.toTimeString().slice(0, 5);
+}
+
+function escapeHtml(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+async function setClassroomLocation() {
+  busy = true; stamp = null; render();
+  try {
+    const coords = await getPosition();
+    const r = await apiPost("setClassroomLocation", { lat: coords.latitude, lon: coords.longitude, pin: crPinValue });
+    if (r.error) stamp = { type: "err", text: r.error };
+    else { state = r.state; stamp = { type: "ok", text: "Classroom location updated" }; }
+  } catch (e) { stamp = { type: "err", text: e.message }; }
+  busy = false; render();
+}
+
+async function startSession() {
+  const subject = subjectInput.trim();
+  if (!subject) { stamp = { type: "err", text: "Type the subject name first" }; render(); return; }
+  if (!state.classroomLocation) { stamp = { type: "err", text: "Set the classroom location first" }; render(); return; }
+  busy = true; render();
+  const r = await apiPost("startSession", { subject, durationMin: durationInput, radiusM: radiusInput, pin: crPinValue });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else { state = r.state; stamp = null; subjectInput = ""; }
+  busy = false; render();
+}
+
+async function endSession() {
+  const r = await apiPost("endSession", { pin: crPinValue });
+  if (r.state) state = r.state;
+  render();
+}
+
+async function addStudent() {
+  if (!newName.trim() || !newRoll.trim()) return;
+  busy = true; render();
+  const r = await apiPost("addStudent", { id: newRoll.trim(), name: newName.trim(), pin: crPinValue });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else { state = r.state; newRoll = ""; newName = ""; stamp = null; }
+  busy = false; render();
+}
+
+async function removeStudent(id) {
+  if (!confirm("Remove " + escapeHtml(id) + " from the roster?")) return;
+  busy = true; render();
+  const r = await apiPost("removeStudent", { id, pin: crPinValue });
+  if (r.state) state = r.state;
+  busy = false; render();
+}
+
+async function syncRosterFromSheet() {
+  busy = true; render();
+  const r = await apiPost("syncRosterFromSheet", { pin: crPinValue });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else { state = r.state; stamp = { type: "ok", text: "Roster synced from sheet" }; }
+  busy = false; render();
+}
+
+async function removeData(action, label) {
+  const extraMsg = deleteSheets ? "\n\nALSO: Subject sheets will be DELETED/REBUILT." : "\n\nSubject sheets will NOT be touched.";
+  if (!confirm("Are you sure?\n" + label + extraMsg + "\n\nThis cannot be undone (except with Undo).")) return;
+  busy = true; render();
+  const r = await apiPost(action, { subject: summarySubject, pin: crPinValue, deleteSheets: deleteSheets });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else {
+    let msg = r.removed + " session(s) removed";
+    if (r.sheetsDeleted) msg += " | " + r.sheetsDeleted + " sheet(s) deleted";
+    state = r.state;
+    stamp = { type: "ok", text: msg };
+  }
+  busy = false; render();
+}
+
+async function removeSpecificSession() {
+  if (!selectedSessionId) { stamp = { type: "err", text: "Select a session first" }; render(); return; }
+  const session = state.sessionHistory.find(h => h.sessionId === selectedSessionId);
+  const label = session ? fmtDateTime(session.startTime) + " — " + session.subject : selectedSessionId;
+  const extraMsg = deleteSheets ? "\n\nALSO: This column will be removed from subject sheet." : "\n\nSubject sheet will NOT be touched.";
+  if (!confirm("Remove specific session?\n" + label + extraMsg + "\n\nThis cannot be undone (except with Undo).")) return;
+  busy = true; render();
+  const r = await apiPost("removeSpecificSession", { sessionId: selectedSessionId, pin: crPinValue, deleteSheets: deleteSheets });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else {
+    let msg = r.removed + " session removed";
+    state = r.state;
+    selectedSessionId = "";
+    stamp = { type: "ok", text: msg };
+  }
+  busy = false; render();
+}
+
+async function undoLastRemoval() {
+  if (!state.canUndo) { stamp = { type: "err", text: "No backup available to restore" }; render(); return; }
+  if (!confirm("UNDO last removal?\n\nThis will restore all sessions and attendance records from the last backup.")) return;
+  busy = true; render();
+  const r = await apiPost("undo", { pin: crPinValue });
+  if (r.error) stamp = { type: "err", text: r.error };
+  else {
+    state = r.state;
+    stamp = { type: "ok", text: "Restored: " + r.restored.sessions + " sessions, " + r.restored.attendance + " attendance records" };
+  }
+  busy = false; render();
+}
+
+function exportExcel(subject) {
+  const sessions = state.sessionHistory.filter(h => h.subject === subject);
+  const total = sessions.length || 1;
+  const summary = state.roster.map(s => {
+    const present = sessions.filter(h => (state.attendanceLog[h.sessionId] || []).some(r => r.studentId === s.id)).length;
+    const pct = Math.round((present / total) * 1000) / 10;
+    return { "Roll No": s.id, Name: s.name, "Classes Present": present, "Total Classes": sessions.length, "Attendance %": pct, Status: pct < 75 ? "Below 75%" : "OK" };
+  });
+  const rawRows = [];
+  sessions.forEach(h => {
+    (state.attendanceLog[h.sessionId] || []).forEach(r => {
+      rawRows.push({ Date: h.dateKey, Subject: h.subject, "Roll No": r.studentId, Name: r.name, Time: new Date(r.timestamp).toLocaleTimeString(), "Distance (m)": r.distanceM });
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rawRows), "Raw Log");
+  const safeName = subject.replace(/[^a-zA-Z0-9\-_]/g, "-");
+  XLSX.writeFile(wb, "attendance-" + safeName + "-" + new Date().toISOString().slice(0,10) + ".xlsx");
+}
+
+async function markAttendance() {
+  stamp = null;
+  if (!studentId) { stamp = { type: "err", text: "Select your name first" }; render(); return; }
+  busy = true; render();
+  try {
+    const coords = await getPosition();
+    const deviceId = getDeviceId();
+    const r = await apiPost("markAttendance", { studentId, lat: coords.latitude, lon: coords.longitude, deviceId: deviceId });
+    if (r.error) stamp = { type: "err", text: r.error };
+    else { state = r.state; stamp = { type: "ok", text: "PRESENT" }; }
+  } catch (e) { stamp = { type: "err", text: e.message }; }
+  busy = false; render();
+}
+
+function switchRole(r) { role = r; stamp = null; render(); }
+
+async function openCrGate() {
+  if (!state.crPin) {
+    const p1 = window.prompt("Set a PIN for CR access (you'll use this every time):");
+    if (!p1 || !p1.trim()) return;
+    const r = await apiPost("setCrPin", { pin: p1.trim() });
+    if (r.state) state = r.state;
+    crPinValue = p1.trim();
+    switchRole("cr");
+    return;
+  }
+  const entered = window.prompt("Enter your CR PIN:");
+  if (entered === null) return;
+  const r = await apiPost("changeCrPin", { currentPin: entered.trim(), newPin: entered.trim() });
+  if (r.error && r.error.includes("incorrect")) {
+    window.alert("Wrong PIN.");
+  } else {
+    crPinValue = entered.trim();
+    switchRole("cr");
+  }
+}
+
+async function changeCrPin() {
+  const current = window.prompt("Enter your current PIN:");
+  if (current === null) return;
+  const newPin = window.prompt("Enter your new PIN:");
+  if (newPin === null || !newPin.trim()) return;
+  const r = await apiPost("changeCrPin", { currentPin: current.trim(), newPin: newPin.trim() });
+  if (r.error) { stamp = { type: "err", text: r.error }; }
+  else { crPinValue = newPin.trim(); state = r.state; stamp = { type: "ok", text: "PIN changed successfully" }; }
+  render();
+}
+
+function render() {
+  const app = document.getElementById("app");
+  if (!loaded) { app.innerHTML = '<div class="loading">Connecting...</div>'; return; }
+
+  const cfg = state.sessionConfig;
+  const remaining = cfg.active && cfg.startTime ? (cfg.startTime + cfg.durationMin * 60000) - Date.now() : 0;
+  const remainingLabel = cfg.active && remaining > 0 ? fmtTime(remaining) : null;
+
+  let html = '<div style="position:relative">' +
+    '<h1>Attendance Register</h1>' +
+    '<button onclick="openCrGate()" title="CR access" style="position:absolute; top:0; right:0; background:none; border:none; color:rgba(255,255,255,.35); font-size:16px; cursor:pointer; padding:4px;">&#9881;</button>' +
+    '</div><div class="rule"></div>';
+
+  if (role === "cr") {
+    html += '<button class="action outline" style="margin-bottom:14px" onclick="switchRole(\'student\')">&larr; Back to student view</button>';
+  }
+
+  if (role === "student") {
+    const canMark = studentId && cfg.active && !busy;
+    html += '<section>' +
+      '<label style="font-size:11px;text-transform:uppercase;color:rgba(241,245,241,.6)">Your name</label>' +
+      '<select id="studentSelect" onchange="studentId=this.value; render();">' +
+        '<option value="">Select from roster</option>' +
+        state.roster.map(s => '<option value="' + escapeHtml(s.id) + '"' + (studentId === s.id ? ' selected' : '') + '>' + escapeHtml(s.id) + ' &mdash; ' + escapeHtml(s.name) + '</option>').join("") +
+      '</select>' +
+      '<p class="hint" id="studentStatusHint">' + (cfg.active ? (remainingLabel ? escapeHtml(cfg.subject) + ' &middot; <span id="timerText">' + remainingLabel + '</span> left' : 'Session closing...') : 'No session open right now') + '</p>' +
+      '<button class="action gold" id="markBtn" ' + (canMark ? '' : 'disabled') + ' onclick="markAttendance()">' + (busy ? 'Checking location...' : 'Mark My Attendance') + '</button>' +
+      (!studentId ? '<p class="hint" style="color:var(--red);margin-top:4px;">Please select your name from the dropdown above</p>' : '') +
+    '</section>';
+    if (stamp) html += '<div class="stamp ' + stamp.type + '">' + escapeHtml(stamp.text) + '</div>';
+    html += '<p class="note">Live &amp; shared across every student\'s phone.</p>';
+  } else {
+    // CR PANEL
+    html += '<section>' +
+      '<h2>Classroom location</h2>' +
+      '<p class="hint">' + (state.classroomLocation ? 'Set &middot; ' + state.classroomLocation.lat.toFixed(5) + ', ' + state.classroomLocation.lon.toFixed(5) : 'Not set yet &mdash; stand in the classroom and tap below') + '</p>' +
+      '<button class="action outline" ' + (busy ? 'disabled' : '') + ' onclick="setClassroomLocation()">' + (state.classroomLocation ? 'Update location' : 'Set current location as classroom') + '</button>' +
+    '</section>';
+
+    html += '<section>' +
+      '<h2>Start a class</h2>';
+    if (cfg.active) {
+      html += '<p style="font-size:14px;margin:6px 0 0"><strong>' + escapeHtml(cfg.subject) + '</strong> is open &middot; ' + (cfg.radiusM || 50) + 'm allowed</p>' +
+        '<p class="mono" style="font-size:14px" id="crTimerText">' + (remainingLabel ? remainingLabel + ' remaining' : 'Time\'s up') + '</p>' +
+        '<button class="action danger" onclick="endSession()">End this class now</button>';
+    } else {
+      html += '<input placeholder="Subject name (e.g. Physics)" value="' + escapeHtml(subjectInput) + '" oninput="subjectInput=this.value" list="subjectList"/>' +
+        '<datalist id="subjectList">' + state.subjects.map(s => '<option value="' + escapeHtml(s) + '">').join('') + '</datalist>' +
+        '<label style="font-size:11px;text-transform:uppercase;color:rgba(245,245,245,.6); display:block; margin-top:10px;">Session length</label>' +
+        '<select onchange="durationCustom = (this.value === \'custom\'); if(!durationCustom) durationInput = Number(this.value); render()" id="durationSelect">' +
+          [2,3,5,10,15].map(m => '<option value="' + m + '"' + ((!durationCustom && durationInput===m)?' selected':'') + '>' + m + ' minutes</option>').join('') +
+          '<option value="custom"' + (durationCustom?' selected':'') + '>Custom...</option>' +
+        '</select>' +
+        (durationCustom ? '<input type="number" min="1" placeholder="Minutes" value="' + durationInput + '" oninput="durationInput=Number(this.value)||1" style="margin-top:6px"/>' : '') +
+        '<label style="font-size:11px;text-transform:uppercase;color:rgba(245,245,245,.6); display:block; margin-top:10px;">Allowed distance from you</label>' +
+        '<select onchange="radiusCustom = (this.value === \'custom\'); if(!radiusCustom) radiusInput = Number(this.value); render()" id="radiusSelect">' +
+          [20,30,50,75,100,150].map(m => '<option value="' + m + '"' + ((!radiusCustom && radiusInput===m)?' selected':'') + '>' + m + ' meters</option>').join('') +
+          '<option value="custom"' + (radiusCustom?' selected':'') + '>Custom...</option>' +
+        '</select>' +
+        (radiusCustom ? '<input type="number" min="1" placeholder="Meters" value="' + radiusInput + '" oninput="radiusInput=Number(this.value)||1" style="margin-top:6px"/>' : '') +
+        '<button class="action gold" onclick="startSession()">Start attendance</button>';
+    }
+    html += '</section>';
+
+    html += '<section>' +
+      '<h2>Roster (' + state.roster.length + ')</h2>' +
+      '<p class="hint">Add students here or edit the <strong>"Roster"</strong> sheet directly in Google Sheets.</p>' +
+      '<div class="row">' +
+        '<input style="width:80px" placeholder="Roll no" value="' + escapeHtml(newRoll) + '" oninput="newRoll=this.value"/>' +
+        '<input placeholder="Name" value="' + escapeHtml(newName) + '" oninput="newName=this.value"/>' +
+        '<button class="gold" style="border:none;border-radius:6px;padding:0 12px" onclick="addStudent()">Add</button>' +
+      '</div>' +
+      '<button class="action outline" style="margin-top:8px" onclick="syncRosterFromSheet()">Sync roster from sheet</button>' +
+      '<div class="maxlist" style="margin-top:10px">' +
+        (state.roster.map(s => '<div class="roster-item"><span class="mono">' + escapeHtml(s.id) + '</span><span style="flex:1;padding:0 8px">' + escapeHtml(s.name) + '</span><button onclick="removeStudent(\'' + escapeHtml(s.id) + '\')">remove</button></div>').join('') || '<p class="hint">No students added yet.</p>') +
+      '</div>' +
+    '</section>';
+
+    html += '<section>' +
+      '<h2>Attendance summary</h2>' +
+      (state.subjects.length === 0 ? '<p class="hint">Start your first class to see summaries here.</p>' : renderSummary()) +
+    '</section>';
+
+    // UNDO BUTTON
+    if (state.canUndo) {
+      html += '<section>' +
+        '<h2><span style="color:var(--blue)">&#8634;</span> Undo last removal</h2>' +
+        '<p class="hint">Accidentally deleted data? Restore it with one click.</p>' +
+        '<button class="action blue" onclick="undoLastRemoval()">Undo Last Removal</button>' +
+      '</section>';
+    }
+
+    // SPECIFIC SESSION REMOVAL
+    html += '<section>' +
+      '<h2>Remove specific session</h2>' +
+      '<p class="hint">Select one exact session to remove (one column from subject sheet).</p>' +
+      '<div class="session-select-row">' +
+        '<select onchange="selectedSessionId=this.value">' +
+          '<option value="">Select session...</option>' +
+          state.sessionHistory.map(h => '<option value="' + escapeHtml(h.sessionId) + '"' + (selectedSessionId === h.sessionId ? ' selected' : '') + '>' + escapeHtml(fmtDateTime(h.startTime)) + ' &mdash; ' + escapeHtml(h.subject) + '</option>').join('') +
+        '</select>' +
+        '<button class="danger" onclick="removeSpecificSession()">Remove</button>' +
+      '</div>' +
+      '<div class="chk-row">' +
+        '<input type="checkbox" id="delSheetsChk2" ' + (deleteSheets ? 'checked' : '') + ' onchange="deleteSheets=this.checked; render();"/>' +
+        '<label for="delSheetsChk2">Also update subject sheets</label>' +
+      '</div>' +
+    '</section>';
+
+    // BULK DATA MANAGEMENT
+    html += '<section>' +
+      '<h2>Bulk data removal</h2>' +
+      '<p class="hint">Remove multiple sessions at once. A backup is created automatically.</p>' +
+      '<div class="chk-row">' +
+        '<input type="checkbox" id="delSheetsChk" ' + (deleteSheets ? 'checked' : '') + ' onchange="deleteSheets=this.checked; render();"/>' +
+        '<label for="delSheetsChk">Also delete/rebuild subject sheets</label>' +
+      '</div>' +
+      '<p class="hint" style="margin-top:4px;">' + (deleteSheets ? 'Checked: Subject sheets will be DELETED or REBUILT.' : 'Unchecked: Only Sessions & Attendance sheets affected.') + '</p>' +
+      '<div class="section-title">Subject: ' + escapeHtml(summarySubject || '&mdash;') + '</div>' +
+      '<div class="data-mgmt-grid">' +
+        '<button class="danger" onclick="removeData(\'removeTodaySubject\',\'Remove TODAY\'s sessions for ' + escapeHtml(summarySubject) + '\')">Remove today (' + escapeHtml(summarySubject || 'subject') + ')</button>' +
+        '<button class="danger" onclick="removeData(\'removeTodayAll\',\'Remove ALL today\'s sessions\')">Remove today (all)</button>' +
+        '<button class="danger" onclick="removeData(\'removeWeekSubject\',\'Remove THIS WEEK\'s sessions for ' + escapeHtml(summarySubject) + '\')">Remove this week (' + escapeHtml(summarySubject || 'subject') + ')</button>' +
+        '<button class="danger" onclick="removeData(\'removeWeekAll\',\'Remove ALL this week\'s sessions\')">Remove this week (all)</button>' +
+        '<button class="danger" onclick="removeData(\'removeAllPreviousSubject\',\'Remove ALL previous sessions for ' + escapeHtml(summarySubject) + '\')">Remove all previous (' + escapeHtml(summarySubject || 'subject') + ')</button>' +
+        '<button class="danger" onclick="removeData(\'removeAllPreviousAll\',\'Remove ALL previous sessions\')">Remove all previous (all)</button>' +
+      '</div>' +
+    '</section>';
+
+    html += '<section>' +
+      '<h2>CR PIN</h2>' +
+      '<div class="cr-pin-box">PIN is set: ' + (state.crPin ? 'Yes' : 'No') + '</div>' +
+      '<button class="action amber" onclick="changeCrPin()">Change CR PIN</button>' +
+    '</section>';
+
+    if (stamp) html += '<div class="stamp ' + stamp.type + '">' + escapeHtml(stamp.text) + '</div>';
+  }
+
+  app.innerHTML = html;
+}
+
+function renderSummary() {
+  if (!summarySubject || state.subjects.indexOf(summarySubject) === -1) summarySubject = state.subjects[0];
+  const sessions = state.sessionHistory.filter(h => h.subject === summarySubject);
+  const total = sessions.length || 0;
+  const rows = state.roster.map(s => {
+    const present = sessions.filter(h => (state.attendanceLog[h.sessionId] || []).some(r => r.studentId === s.id)).length;
+    const pct = total ? Math.round((present / total) * 1000) / 10 : 0;
+    const low = total > 0 && pct < 75;
+    return '<div class="summary-line"><span>' + escapeHtml(s.name) + '</span><span class="mono ' + (low ? 'low' : 'ok-pct') + '">' + present + '/' + total + ' &middot; ' + pct + '%</span></div>';
+  }).join('');
+  return '<select onchange="summarySubject=this.value; render()">' +
+    state.subjects.map(s => '<option value="' + escapeHtml(s) + '"' + (s === summarySubject ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('') +
+    '</select>' +
+    '<p class="hint">' + total + ' class(es) recorded for ' + escapeHtml(summarySubject) + '</p>' +
+    '<div class="maxlist">' + rows + '</div>' +
+    '<button class="action outline" onclick="exportExcel(\'' + escapeHtml(summarySubject) + '\')">Export ' + escapeHtml(summarySubject) + ' to Excel</button>';
+}
+
+function tick() {
+  if (!loaded) return;
+  const cfg = state.sessionConfig;
+  if (!cfg.active || !cfg.startTime) return;
+  const remaining = (cfg.startTime + cfg.durationMin * 60000) - Date.now();
+  if (remaining <= 0) { render(); return; }
+  const label = fmtTime(remaining);
+  const t1 = document.getElementById("timerText");
+  if (t1) t1.textContent = label;
+  const t2 = document.getElementById("crTimerText");
+  if (t2) t2.textContent = label + " remaining";
+}
+
+window.switchRole = switchRole;
+window.markAttendance = markAttendance;
+window.setClassroomLocation = setClassroomLocation;
+window.startSession = startSession;
+window.endSession = endSession;
+window.addStudent = addStudent;
+window.removeStudent = removeStudent;
+window.syncRosterFromSheet = syncRosterFromSheet;
+window.exportExcel = exportExcel;
+window.openCrGate = openCrGate;
+window.changeCrPin = changeCrPin;
+window.removeData = removeData;
+window.removeSpecificSession = removeSpecificSession;
+window.undoLastRemoval = undoLastRemoval;
+
+initialLoad();
+setInterval(tick, 1000);
+setInterval(backgroundRefresh, 6000);
+</script>
+</body>
+</html>
